@@ -1,0 +1,24 @@
+[project]
+name = "prtool"
+version = "0.1.0"
+description = "Quickly dispatch GitHub pull requests from multiple markdown-written commits in a git repo"
+authors = [{ name = "Ricardo Pardini", email = "ricardo@pardini.net" }]
+dependencies = [
+    "gitpython==3.1.45",
+    "pygithub==2.8.1",
+    "PyYAML==6.0.3",
+    "rich==14.1.0",
+]
+requires-python = ">=3.14"
+
+[project.scripts]
+prtool = "prtool:main"
+
+[tool.uvx.scripts]
+prtool = "prtool.py"
+
+[tool.uv]
+python-preference = "managed"
+
+[tool.ruff]
+line-length = 120

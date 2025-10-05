@@ -5,13 +5,18 @@ from pathlib import Path
 
 from git import Repo
 from github import Github, Auth
+from rich.console import Console
 from rich.logging import RichHandler
+from rich.prompt import Prompt
+from rich.table import Table
+
+console = Console()
 
 logging.basicConfig(
 	level=logging.INFO,
 	format="%(message)s",
 	datefmt="[%X]",
-	handlers=[RichHandler(rich_tracebacks=True)]
+	handlers=[RichHandler(rich_tracebacks=True, console=console)],
 )
 logger = logging.getLogger("prtool")
 
@@ -138,31 +143,36 @@ for sha1 in cherry_pick_sha1s:
 
 # If more than one commit, ask the user, which commit to use as title.
 pr_title = None
+
+# Replace the interactive commit selection with Rich components
 if len(commit_messages) > 1:
-	# Show a list of commits, and ask the user to select one, or type a completely new one.
-	commit_messages_with_index = []
+	# Display a table of commit messages
+	table = Table(title="Select a Commit Message for the PR Title")
+	table.add_column("Index", justify="right", style="cyan", no_wrap=True)
+	table.add_column("Commit Message", style="magenta")
+
 	for index, commit_message in enumerate(commit_messages):
-		commit_messages_with_index.append(f"{index + 1}. {commit_message.splitlines()[0]}")
-	commit_messages_with_index.append("n. Type a new title")
-	commit_messages_with_index.append("q. Quit")
-	commit_messages_with_index_str = "\n".join(commit_messages_with_index)
-	commit_messages_with_index_str += "\n\nEnter your choice: "
-	choice = input(commit_messages_with_index_str)
+		table.add_row(str(index + 1), commit_message.splitlines()[0])
+
+	table.add_row("n", "Type a new title")
+	table.add_row("q", "Quit")
+
+	console.print(table)
+
+	# Prompt the user for a choice
+	choice = Prompt.ask("Enter your choice", choices=[str(i + 1) for i in range(len(commit_messages))] + ["n", "q"])
+
 	if choice == "q":
-		logger.info(f"Aborting.")
+		console.print("Exiting...", style="bold red")
 		sys.exit(0)
 	elif choice == "n":
-		pr_title = input("Enter the PR title: ")
+		pr_title = Prompt.ask("Type a new title")
 	else:
-		choice_int = int(choice)
-		if choice_int < 1 or choice_int > len(commit_messages):
-			logger.error(f"Invalid choice '{choice}'.")
-			sys.exit(1)
-		# Subtract 1, since the list is 0-based, but the choices are 1-based.
-		pr_title = commit_messages[choice_int - 1].splitlines()[0].strip()
+		pr_title = commit_messages[int(choice) - 1].splitlines()[0]
 else:
-	# Create the suggested PR title, from the first commit's first line
-	pr_title = commit_messages[0].splitlines()[0].strip()
+	pr_title = commit_messages[0].splitlines()[0]
+
+console.print(f"Selected PR title: [bold green]{pr_title}[/bold green]")
 
 markdown_commit_messages = []
 

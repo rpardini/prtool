@@ -174,6 +174,48 @@ else:
 
 console.print(f"Selected PR title: [bold green]{pr_title}[/bold green]")
 
+
+# Beautify, as commits might be word-wrapped, and that looks horrible on GitHub.
+# Split the commits_markdown in to lines
+# For each line, if it doesn't start (optionally space prefixed) "dash", trim leading spaces, and join to the previous line.
+def rewrap_markdown(markdown: str) -> str:
+	lines = markdown.splitlines()
+	rewrapped_lines = []
+	previous_line = ""
+	for line in lines:
+		stripped_line = line.lstrip()
+		if stripped_line.startswith("- "):
+			if previous_line:
+				rewrapped_lines.append(previous_line)
+			previous_line = line
+		else:
+			previous_line += " " + stripped_line
+	if previous_line:
+		rewrapped_lines.append(previous_line)
+	return emojify_first_level_bullet_points("\n".join(rewrapped_lines))
+
+
+# Add emojis to first level bullet points; cycle through the emoji list and use them for each bullet point.
+# Use generic, commonly used emojis that don't mean much; favor the plant-based ones (greenery is good).
+emoji_list = ["🌱", "🌿", "🍃", "🍀", "🐸", "🌳", "🌴", "🌵"]
+
+
+def emojify_first_level_bullet_points(markdown: str) -> str:
+	lines = markdown.splitlines()
+	emojified_lines = []
+	emoji_index = 0
+	for line in lines:
+		stripped_line = line  # don't strip otherwise all levels are affected
+		if stripped_line.startswith("- "):
+			emoji = emoji_list[emoji_index % len(emoji_list)]
+			emoji_index += 1
+			new_line = line.replace("- ", f"- {emoji} ", 1)
+			emojified_lines.append(new_line)
+		else:
+			emojified_lines.append(line)
+	return "\n".join(emojified_lines)
+
+
 markdown_commit_messages = []
 
 # If only a single commit, do a short version, otherwise PRs spell out the same stuff many times
@@ -185,7 +227,7 @@ if len(commit_messages) == 1:
 	other_lines = [f"{line}" for line in other_lines]
 	markdown_commit_messages.extend(other_lines)
 	commits_markdown = "\n".join(markdown_commit_messages)
-	full_markdown = f"{commits_markdown}"
+	full_markdown = f"{rewrap_markdown(commits_markdown)}"
 else:
 	logger.info(f"Multiple commits, using a long PR message.")
 	# Let's process each commit message, massaging it into a Markdown list item
@@ -199,7 +241,7 @@ else:
 		markdown_commit_messages.append(f"- {title}")
 		markdown_commit_messages.extend(other_lines)
 	commits_markdown = "\n".join(markdown_commit_messages)
-	full_markdown = f"#### {pr_title}\n\n{commits_markdown}"
+	full_markdown = f"#### {pr_title}\n\n{rewrap_markdown(commits_markdown)}"
 
 # Show the title
 logger.info(f"Title: '{pr_title}'")

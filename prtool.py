@@ -1,5 +1,6 @@
 import logging
 import os
+import random
 import sys
 from pathlib import Path
 
@@ -184,6 +185,10 @@ def rewrap_markdown(markdown: str) -> str:
 	previous_line = ""
 	for line in lines:
 		stripped_line = line.lstrip()
+		# if the line start with "Signed-off-by:", completely skip it
+		if stripped_line.startswith("Signed-off-by:"):
+			continue
+
 		if stripped_line.startswith("- "):
 			if previous_line:
 				rewrapped_lines.append(previous_line)
@@ -198,6 +203,9 @@ def rewrap_markdown(markdown: str) -> str:
 # Add emojis to first level bullet points; cycle through the emoji list and use them for each bullet point.
 # Use generic, commonly used emojis that don't mean much; favor the plant-based ones (greenery is good).
 emoji_list = ["🌱", "🌿", "🍃", "🍀", "🐸", "🌳", "🌴", "🌵"]
+
+# randomize the order of the emojis
+random.shuffle(emoji_list)
 
 
 def emojify_first_level_bullet_points(markdown: str) -> str:

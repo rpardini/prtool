@@ -189,6 +189,13 @@ def rewrap_markdown(markdown: str) -> str:
 		if stripped_line.startswith("Signed-off-by:"):
 			continue
 
+		# Do nothing with quoted lines: if line starts with "> ", keep it as is, and don't join it to the previous line, even if it doesn't start with a dash.
+		if stripped_line.startswith("> "):
+			if previous_line:
+				rewrapped_lines.append(previous_line)
+			previous_line = line
+			continue
+
 		if stripped_line.startswith("- "):
 			if previous_line:
 				rewrapped_lines.append(previous_line)

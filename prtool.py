@@ -3,6 +3,7 @@ import logging
 import os
 import random
 import re
+import readline  # noqa: F401 -- gives input() line editing (arrows, history)
 import shlex
 import subprocess
 import sys
@@ -505,7 +506,8 @@ def ask_note(previous: list[str]) -> list[str]:
 		hint = "[cyan]Enter[/]=keep, [cyan]-[/]=clear, [cyan]e[/]=$EDITOR, or type a new note"
 	else:
 		hint = "[cyan]Enter[/]=none, [cyan]e[/]=$EDITOR, or type it; one bullet per line, empty line ends"
-	first = console.input(f"[bold]Note[/] ({hint}): ")
+	console.print(f"[bold]Note[/] ({hint}):")
+	first = input("  > ")
 	if not first.strip():
 		return previous
 	if first.strip() == "-" and previous:
@@ -513,7 +515,7 @@ def ask_note(previous: list[str]) -> list[str]:
 	if first.strip() == "e":
 		return edit_note_in_editor(previous)
 	lines = [first]
-	while line := console.input("  [dim]>[/] "):
+	while line := input("  > "):
 		lines.append(line)
 	return normalize_note(lines)
 

@@ -185,8 +185,8 @@ def rewrap_markdown(markdown: str) -> str:
 	previous_line = ""
 	for line in lines:
 		stripped_line = line.lstrip()
-		# if the line start with "Signed-off-by:", completely skip it
-		if stripped_line.startswith("Signed-off-by:"):
+		# if the line start with "Signed-off-by:", completely skip it; also 'Assisted-by:' and 'Reviewed-by:' and 'Co-authored-by:'
+		if stripped_line.startswith("Signed-off-by:") or stripped_line.startswith("Assisted-by:") or stripped_line.startswith("Reviewed-by:") or stripped_line.startswith("Co-authored-by:"):
 			continue
 
 		if stripped_line.startswith("- "):

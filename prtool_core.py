@@ -271,6 +271,25 @@ def rebase_work_branch(repo: Repo, work_branch: str, base_ref: str, log: LogFn):
 	log(f"Rebased '{work_branch}' onto {base_ref}")
 
 
+def commits_behind(repo: Repo, base_ref: str) -> list:
+	"""Upstream commits not in the work branch, newest first."""
+	return list(repo.iter_commits(f"HEAD..{base_ref}"))
+
+
+def rebase_conflicts(repo: Repo, base_ref: str) -> list[str]:
+	"""Dry check, writes no refs: paths that would conflict combining HEAD with base_ref; [] if clean.
+	Checks the end result, not each replayed commit; rebase_work_branch still aborts if a single pick fails."""
+	status, out, err = repo.git.merge_tree(
+		"--write-tree", "--name-only", "--no-messages", "HEAD", base_ref, with_extended_output=True, with_exceptions=False
+	)
+	if status == 0:
+		return []
+	if status != 1:
+		raise PrtoolError(f"git merge-tree failed ({status}): {err}")
+	# stdout: tree OID, then conflicted paths
+	return [line.strip() for line in out.splitlines()[1:] if line.strip()] or ["(unknown)"]
+
+
 def resolve_revisions(repo: Repo, revisions: list[str]) -> list:
 	commits = []
 	for revision in revisions:
@@ -288,6 +307,10 @@ def commits_ahead(repo: Repo, base_ref: str) -> list:
 
 def subject_of(commit) -> str:
 	return commit.message.splitlines()[0].strip()
+
+
+def is_nopr(commit) -> bool:
+	return subject_of(commit).upper().startswith("[NOPR]")
 
 
 def push_pr_branch(repo: Repo, work_branch: str, pr_branch: str, base_ref: str, shas: list[str], push_remote: str, log: LogFn):

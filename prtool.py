@@ -15,7 +15,7 @@ def parse_args():
 	parser.add_argument("--reconfigure", action="store_true", help="start on the settings screen")
 	parser.add_argument("--base", help="one-off base branch override (not stored)")
 	parser.add_argument("--no-fetch", dest="fetch", action="store_false", help="don't fetch the upstream base at start")
-	parser.add_argument("--no-rebase", dest="rebase", action="store_false", help="don't rebase the work branch")
+	parser.add_argument("--no-rebase", dest="rebase", action="store_false", help="don't offer to rebase the work branch when upstream is ahead (F6 still does)")
 	parser.add_argument("-v", "--verbose", action="store_true", help="debug logging, into the Log pane")
 	return parser.parse_args()
 

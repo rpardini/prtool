@@ -9,7 +9,6 @@ from pathlib import Path
 
 from git import GitCommandError, Repo
 from github import GithubException
-from rich.markup import escape
 from rich.table import Table
 from textual import on, work
 from textual.app import App, ComposeResult
@@ -40,6 +39,11 @@ PR_STATE_STYLES = {"open": "green", "draft": "dim green", "merged": "magenta", "
 NEW = "new"
 OTHER = "__other__"
 ADD = "__add__"
+
+
+def esc(text: str) -> str:
+	"""Escape for Textual markup (and Rich's). rich.markup.escape skips uppercase tags like '[NOPR]', which Textual parses."""
+	return text.replace("[", "\\[")
 
 
 def styled_state(state: str) -> str:
@@ -79,6 +83,46 @@ class ConfirmScreen(ModalScreen[bool]):
 
 	def on_mount(self):
 		self.query_one("#yes", Button).focus()
+
+	@on(Button.Pressed)
+	def pressed(self, event: Button.Pressed):
+		self.dismiss(event.button.id == "yes")
+
+	def action_answer(self, answer: bool):
+		self.dismiss(answer)
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# Modal: upstream moved; offer to rebase the work branch (flat history, never a merge)
+
+
+class RebaseScreen(ModalScreen[bool]):
+	BINDINGS = [Binding("escape", "answer(False)", "Not now")]
+	MAX_SHOWN = 50
+
+	def __init__(self, title: str, behind: list, conflicts: list[str]):
+		super().__init__()
+		self.title_text, self.behind, self.conflicts = title, behind, conflicts
+
+	def compose(self) -> ComposeResult:
+		lines = [f"[yellow]{c.hexsha[:10]}[/] {esc(core.subject_of(c))}" for c in self.behind[: self.MAX_SHOWN]]
+		if len(self.behind) > self.MAX_SHOWN:
+			lines.append(f"[dim]… and {len(self.behind) - self.MAX_SHOWN} more[/]")
+		if self.conflicts:
+			verdict = f"[red]✗ conflicts in:[/] {esc(', '.join(self.conflicts))}"
+		else:
+			verdict = "[green]✓ rebases cleanly[/] [dim](git merge-tree dry check)[/]"
+		with Vertical(classes="dialog"):
+			yield Label(self.title_text, classes="dialog-title")
+			with VerticalScroll(id="behind-list"):
+				yield Static("\n".join(lines))
+			yield Static(verdict, id="rebase-verdict")
+			with Horizontal(classes="buttons"):
+				yield Button("Rebase if no conflicts", variant="primary", id="yes", disabled=bool(self.conflicts))
+				yield Button("Not now", id="no")
+
+	def on_mount(self):
+		self.query_one("#no" if self.conflicts else "#yes", Button).focus()
 
 	@on(Button.Pressed)
 	def pressed(self, event: Button.Pressed):
@@ -144,7 +188,7 @@ class SettingsScreen(ModalScreen[dict | None]):
 
 	def set_upstreams(self, candidates):
 		select = self.query_one("#upstream", Select)
-		select.set_options([(f"{slug}  [dim]{escape(why)}[/]", slug) for slug, why in candidates] + [("Other…", OTHER)])
+		select.set_options([(f"{slug}  [dim]{esc(why)}[/]", slug) for slug, why in candidates] + [("Other…", OTHER)])
 		select.value = candidates[0][0] if candidates else OTHER
 		self.status("")
 
@@ -238,7 +282,7 @@ class SettingsScreen(ModalScreen[dict | None]):
 			try:
 				app.repo.create_remote(*add_remote)
 			except GitCommandError as e:
-				self.app.call_from_thread(self.status, f"[red]Couldn't add remote: {escape(str(e))}[/]")
+				self.app.call_from_thread(self.status, f"[red]Couldn't add remote: {esc(str(e))}[/]")
 				return
 			app.log_line(f"Added remote '{add_remote[0]}' → {add_remote[1]}")
 		cfg = {"upstream": gh_repo.full_name, "base": base, "push_remote": remote, "configured_at": core.now_iso()}
@@ -274,7 +318,7 @@ class HistoryScreen(Screen[int | None]):
 		table = self.query_one(DataTable)
 		table.clear()
 		for record in sorted(self.app.history.records, key=lambda r: r.get("updated", ""), reverse=True):
-			title = escape(record["title"]) + (" [dim]✎[/]" if record.get("title_custom") else "")
+			title = esc(record["title"]) + (" [dim]✎[/]" if record.get("title_custom") else "")
 			table.add_row(
 				f"#{record['number']}",
 				styled_state(record.get("state", "unknown")),
@@ -339,6 +383,17 @@ class SettingsBar(Static):
 class CommitList(SelectionList):
 	BINDINGS = [Binding("a", "select_all", "All"), Binding("n", "deselect_all", "None")]
 
+	def action_select_all(self):
+		# SelectionList.select_all() would also select disabled ([NOPR]) options
+		with self.prevent(SelectionList.SelectedChanged):
+			for option in list(self._options):
+				if not option.disabled:
+					self.select(option.value)
+		self.post_message(SelectionList.SelectedChanged(self))
+
+	def action_deselect_all(self):
+		self.deselect_all()
+
 
 class LogHandler(logging.Handler):
 	def __init__(self, app: PrtoolApp):
@@ -346,7 +401,7 @@ class LogHandler(logging.Handler):
 		self.prtool_app = app
 
 	def emit(self, record):
-		self.prtool_app.log_line(f"[dim]{escape(self.format(record))}[/]")
+		self.prtool_app.log_line(f"[dim]{esc(self.format(record))}[/]")
 
 
 class PrtoolApp(App):
@@ -381,12 +436,15 @@ class PrtoolApp(App):
 	#add-remote { height: auto; }
 	#add-remote Input { width: 1fr; }
 	ModalScreen { align: center middle; }
+	#behind-list { height: auto; max-height: 20; }
+	#rebase-verdict { margin-top: 1; }
 	"""
 	BINDINGS = [
 		Binding("ctrl+s", "send", "Send PR", priority=True),
 		Binding("f2", "settings", "Settings"),
 		Binding("f3", "history", "History"),
 		Binding("f5", "reload", "Fetch & reload"),
+		Binding("f6", "offer_rebase", "Rebase…"),
 		Binding("ctrl+t", "cycle_title", "Cycle title"),
 		Binding("ctrl+o", "open_pr", "Open PR"),
 		Binding("ctrl+l", "toggle_log", "Log"),
@@ -407,6 +465,8 @@ class PrtoolApp(App):
 		self.problem: str | None = None
 		self.commits: list = []
 		self.first_load = True
+		self.behind: list = []  # upstream commits not in the work branch, newest first
+		self.dismissed_base_sha: str | None = None  # "Not now" for this upstream tip; don't re-ask until it moves
 		self.base_override = args.base
 		# form state
 		self.target_pr = None  # live PR object when updating
@@ -473,14 +533,14 @@ class PrtoolApp(App):
 			self.call_from_thread(self.query_one("#log", RichLog).write, line)
 
 	def log_plain(self, message: str):
-		self.log_line(escape(message))
+		self.log_line(esc(message))
 
 	def fail(self, message: str):
-		self.log_line(f"[red]{escape(message)}[/]")
+		self.log_line(f"[red]{esc(message)}[/]")
 		if threading.current_thread() is threading.main_thread():
-			self.notify(message, severity="error", timeout=10)
+			self.notify(esc(message), severity="error", timeout=10)
 		else:
-			self.call_from_thread(self.notify, message, severity="error", timeout=10)
+			self.call_from_thread(self.notify, esc(message), severity="error", timeout=10)
 
 	# --- startup / settings / reload ---
 
@@ -559,11 +619,9 @@ class PrtoolApp(App):
 
 		core.ensure_base(self.repo, self.upstream_repo.full_name, self.base, fetch, self.log_plain)
 		base_ref = core.upstream_ref(self.base)
-		if self.args.rebase and self.problem is None:
-			try:
-				core.rebase_work_branch(self.repo, self.work_branch, base_ref, self.log_plain)
-			except core.PrtoolError as e:
-				self.fail(str(e))
+		self.behind = core.commits_behind(self.repo, base_ref)
+		if self.behind:
+			self.log_line(f"[yellow]{core.upstream_ref(self.base)} is {len(self.behind)} commit{'s' if len(self.behind) != 1 else ''} ahead of '{esc(self.work_branch or 'HEAD')}'[/]")
 		commits = core.commits_ahead(self.repo, base_ref)
 
 		preselect = None
@@ -576,13 +634,16 @@ class PrtoolApp(App):
 		self.call_from_thread(self.populate, commits, preselect)
 		if self.first_load and self.args.list:
 			self.call_from_thread(self.action_history)
+		elif self.args.rebase and self.behind and self.behind[0].hexsha != self.dismissed_base_sha:
+			self._offer_rebase()
 		self.first_load = False
 
 	def update_bars(self):
 		upstream = self.upstream_repo.full_name if self.upstream_repo else self.cfg["upstream"]
 		session = "" if self.cfg_persisted and not self.base_override else "  [yellow](session only)[/]"
+		behind = f" [yellow]+{len(self.behind)}[/]" if self.behind else ""
 		self.query_one("#settings-bar", SettingsBar).update(
-			f"⚙ [b]{upstream}[/] ← [b]{self.owner}[/]   base [b]{self.base}[/]   push [b]{self.push_remote}[/]   "
+			f"⚙ [b]{upstream}[/] ← [b]{self.owner}[/]   base [b]{self.base}[/]{behind}   push [b]{self.push_remote}[/]   "
 			f"work [b]{self.work_branch or '(detached)'}[/]{session}   [dim]F2 / click to edit[/]"
 		)
 		warning = self.query_one("#warning", Static)
@@ -601,9 +662,13 @@ class PrtoolApp(App):
 			commit_list.clear_options()
 			for commit in commits:
 				subject = core.subject_of(commit)
+				if core.is_nopr(commit):
+					prompt = f"[dim]{commit.hexsha[:10]} {esc(subject)}  (not for PRs)[/]"
+					commit_list.add_option(Selection(prompt, commit.hexsha, False, disabled=True))
+					continue
 				record = by_subject.get(subject)
 				badge = f"  [b]#{record['number']}[/] {styled_state(record.get('state', 'unknown'))}" if record else ""
-				prompt = f"[yellow]{commit.hexsha[:10]}[/] {escape(subject)}{badge}"
+				prompt = f"[yellow]{commit.hexsha[:10]}[/] {esc(subject)}{badge}"
 				commit_list.add_option(Selection(prompt, commit.hexsha, commit.hexsha in preselect))
 		self.query_one("#no-commits").set_class(not commits, "shown")
 		self.query_one("#title", Input).suggester = SuggestFromList([core.subject_of(c) for c in commits], case_sensitive=False)
@@ -618,9 +683,9 @@ class PrtoolApp(App):
 		select = self.query_one("#target", Select)
 		options = [("New PR", NEW)]
 		for record in sorted(self.history.open_records(), key=lambda r: r.get("updated", ""), reverse=True):
-			options.append((f"Update #{record['number']}  {escape(record['title'])}", record["number"]))
+			options.append((f"Update #{record['number']}  {esc(record['title'])}", record["number"]))
 		if self.target_pr is not None and self.target_pr.number not in [o[1] for o in options]:
-			options.append((f"Update #{self.target_pr.number}  {escape(self.target_pr.title)}", self.target_pr.number))
+			options.append((f"Update #{self.target_pr.number}  {esc(self.target_pr.title)}", self.target_pr.number))
 		current = select.value
 		with select.prevent(Select.Changed):
 			select.set_options(options)
@@ -630,7 +695,7 @@ class PrtoolApp(App):
 
 	def selected_commits(self) -> list:
 		selected = set(self.query_one("#commits", CommitList).selected)
-		return [c for c in self.commits if c.hexsha in selected]
+		return [c for c in self.commits if c.hexsha in selected and not core.is_nopr(c)]
 
 	def set_input(self, selector: str, value: str):
 		widget = self.query_one(selector, Input)
@@ -669,7 +734,7 @@ class PrtoolApp(App):
 		if match:
 			record, pr, overlap = match
 			if self.target_pr is None or self.target_pr.number != pr.number:
-				self.log_line(f"Selected commits match [b]#{pr.number}[/] ({overlap}/{total}): {escape(record['title'])}")
+				self.log_line(f"Selected commits match [b]#{pr.number}[/] ({overlap}/{total}): {esc(record['title'])}")
 				self.apply_target(pr, record)
 		elif self.target_pr is not None:
 			self.apply_target(None, None)
@@ -767,7 +832,7 @@ class PrtoolApp(App):
 			preview.update("*Select some commits on the left.*")
 			return
 		title = self.query_one("#title", Input).value.strip() or "(no title)"
-		self.query_one("#preview-wrap").border_title = f"Body preview · [b]{escape(title)}[/]"
+		self.query_one("#preview-wrap").border_title = f"Body preview · [b]{esc(title)}[/]"
 		preview.update(core.build_body(title, [c.message for c in commits], self.current_note()))
 
 	# --- sending ---
@@ -819,8 +884,8 @@ class PrtoolApp(App):
 			grid.add_row("Action", f"[yellow]update[/] #{plan.existing_pr.number}{how}\n{plan.existing_pr.html_url}")
 		else:
 			grid.add_row("Action", "[green]create draft PR[/]")
-		grid.add_row("Title", f"[bold]{escape(plan.title)}[/]")
-		grid.add_row("Commits", "\n".join(f"[yellow]{c.hexsha[:10]}[/] {escape(core.subject_of(c))}" for c in plan.commits))
+		grid.add_row("Title", f"[bold]{esc(plan.title)}[/]")
+		grid.add_row("Commits", "\n".join(f"[yellow]{c.hexsha[:10]}[/] {esc(core.subject_of(c))}" for c in plan.commits))
 		grid.add_row("Push", f"force-push to '{self.push_remote}'")
 
 		def done(yes: bool):
@@ -854,6 +919,62 @@ class PrtoolApp(App):
 		with select.prevent(Select.Changed):
 			select.value = self._target_value = pr.number
 		self.query_one("#branch", Input).disabled = True
+
+	# --- rebasing the work branch onto upstream (never merging) ---
+
+	def action_offer_rebase(self):
+		if self.cfg is None or self.upstream_repo is None:
+			self.notify("Not ready yet.")
+			return
+		if self.problem:
+			self.notify(self.problem, severity="error")
+			return
+		if not self.behind:
+			self.notify(f"'{self.work_branch}' is up to date with {self.upstream_repo.full_name} '{self.base}'.")
+			return
+		self.offer_rebase_worker()
+
+	@work(thread=True, exclusive=True, group="rebase")
+	def offer_rebase_worker(self):
+		self._offer_rebase()
+
+	def _offer_rebase(self):
+		"""Worker thread: dry-check with merge-tree, then ask."""
+		if self.problem or not self.behind:
+			return
+		base_ref = core.upstream_ref(self.base)
+		try:
+			conflicts = core.rebase_conflicts(self.repo, base_ref)
+		except core.PrtoolError as e:
+			self.fail(str(e))
+			return
+		self.call_from_thread(self.ask_rebase, list(self.behind), conflicts)
+
+	def ask_rebase(self, behind: list, conflicts: list[str]):
+		def done(yes: bool):
+			if yes:
+				self.rebase_now()
+			else:
+				self.dismissed_base_sha = behind[0].hexsha
+				self.log_line("Not rebasing; F6 offers it again")
+
+		title = f"{self.upstream_repo.full_name} '{self.base}' is {len(behind)} commit{'s' if len(behind) != 1 else ''} ahead of '{self.work_branch}'"
+		self.push_screen(RebaseScreen(esc(title), behind, conflicts), done)
+
+	@work(thread=True, exclusive=True, group="rebase")
+	def rebase_now(self):
+		base_ref = core.upstream_ref(self.base)
+		try:
+			if core.working_copy_problem(self.repo):
+				raise core.PrtoolError(core.working_copy_problem(self.repo))
+			conflicts = core.rebase_conflicts(self.repo, base_ref)
+			if conflicts:
+				raise core.PrtoolError(f"Not rebasing; conflicts in: {', '.join(conflicts)}")
+			core.rebase_work_branch(self.repo, self.work_branch, base_ref, self.log_plain)
+		except (core.PrtoolError, GitCommandError) as e:
+			self.fail(str(e))
+			return
+		self.call_from_thread(self.reload, False)
 
 	# --- other actions ---
 
